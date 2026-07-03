@@ -7,7 +7,10 @@ app = Flask(__name__)
 hash_ring = ConsistentHash()
 
 #list of active servers replicas
-servers = []
+servers = [{"id": 1, "hostname": "Server1"},
+    {"id": 2, "hostname": "Server2"},
+    {"id": 3, "hostname": "Server3"}
+]
 
 def find_hostname(server_id):
     for server in servers:
@@ -33,6 +36,20 @@ def replicas():
             "replicas": [server["hostname"] for server in servers]
         },
         "status": "successful"
+    }), 200
+
+@app.route("/route", methods=["GET"])
+def route_request():
+    request_id = random.randint(100000, 999999)
+    server_info = hash_ring.get_server(request_id)
+    server_id = server_info["server"]
+    hostname = find_hostname(server_id)
+
+    return jsonify({
+        "request_id": request_id,
+        "server_id": server_id,
+        "virtual_server": server_info["virtual"],
+        "hostname": hostname
     }), 200
 
 if __name__ == '__main__':
