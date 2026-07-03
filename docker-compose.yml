@@ -1,0 +1,62 @@
+services:
+  server1:
+    build: ./server
+    environment:
+      SERVER_ID: 1
+    networks:
+      - lb_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  server2:
+    build: ./server
+    environment:
+      SERVER_ID: 2
+    networks:
+      - lb_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  server3:
+    build: ./server
+    environment:
+      SERVER_ID: 3
+    networks:
+      - lb_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  load_balancer:
+    build: ./load_balancer
+    ports:
+      - "5000:5000"
+    depends_on:
+      server1:
+        condition: service_healthy
+      server2:
+        condition: service_healthy
+      server3:
+        condition: service_healthy
+    networks:
+      - lb_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/rep"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  lb_network:
