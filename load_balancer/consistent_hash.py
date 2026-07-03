@@ -25,6 +25,25 @@ class ConsistentHash:
                 "server": server_id,
                 "virtual": virtual_id
             }
+    def request_hash(self, request_id):
+        """
+        Hashes the request ID to a position on the hash ring and finds the corresponding server.
+        """
+        return (request_id**2 + 2*request_id + 17) % self.num_slots
+    
+    def get_server(self, request_id):
+        """
+        Given a request ID, finds the corresponding server on the hash ring.
+        """
+        slot = self.request_hash(request_id)
+        start_slot = slot
+        while self.hash_ring[slot] is None:
+            slot = (slot + 1) % self.num_slots
+            if slot == start_slot:
+                raise Exception("No servers available")
+        return self.hash_ring[slot]
+
+
 
 if __name__ == "__main__":
 
@@ -34,6 +53,10 @@ if __name__ == "__main__":
     ring.add_server(2)
     ring.add_server(3)
 
-    for slot, server in enumerate(ring.hash_ring):
-        if server:
-            print(f"Slot {slot}: {server}")
+    test_requests = [1001, 2456, 8765, 123456, 999999]
+
+    for request in test_requests:
+        server = ring.get_server(request)
+        slot = ring.request_hash(request)
+
+        print(f"Request {request} -> Slot {slot} -> Server {server}")
