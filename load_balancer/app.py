@@ -51,6 +51,3 @@ def route_request():
         "virtual_server": server_info["virtual"],
         "hostname": hostname
     }), 200
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
