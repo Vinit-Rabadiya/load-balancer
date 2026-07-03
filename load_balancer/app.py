@@ -1,31 +1,22 @@
 from flask import Flask, jsonify
 from consistent_hash import ConsistentHash
 import random
+import requests
 
 app = Flask(__name__)
 # Initialize the consistent hash ring
 hash_ring = ConsistentHash()
 
 #list of active servers replicas
-servers = [{"id": 1, "hostname": "Server1"},
-    {"id": 2, "hostname": "Server2"},
-    {"id": 3, "hostname": "Server3"}
-]
-
-def find_hostname(server_id):
-    for server in servers:
-        if server["id"] == server_id:
-            return server["hostname"]
-    return None
+servers = {}
 
 #adding three default servers to the hash ring
 for server_id in range(1, 4):
     hash_ring.add_server(server_id)
     
-    servers.append({
-        "id": server_id,
-        "hostname": f"Server{server_id}",
-    })
+    servers[server_id] = {
+        "hostname": f"server{server_id}"
+    }
 
 @app.route('/rep', methods=['GET'])
 def replicas():
@@ -33,7 +24,7 @@ def replicas():
     return jsonify({
         "message":{
             "N": len(servers),
-            "replicas": [server["hostname"] for server in servers]
+            "replicas": [server["hostname"] for server in servers.values()]
         },
         "status": "successful"
     }), 200
@@ -43,11 +34,29 @@ def route_request():
     request_id = random.randint(100000, 999999)
     server_info = hash_ring.get_server(request_id)
     server_id = server_info["server"]
-    hostname = find_hostname(server_id)
 
     return jsonify({
         "request_id": request_id,
         "server_id": server_id,
         "virtual_server": server_info["virtual"],
-        "hostname": hostname
     }), 200
+
+@app.route("/home", methods=["GET"])
+def forward_home():
+
+    # Generate a random request ID
+    request_id = random.randint(100000, 999999)
+
+    # Find which server should handle it
+    server_info = hash_ring.get_server(request_id)
+
+    server_id = server_info["server"]
+
+    hostname = servers[server_id]["hostname"]
+
+    # Forward the request
+    try:
+        response = requests.get(f"http://{hostname}:5000/home")
+    except requests.RequestException:
+        # Return the server's response
+        return jsonify(response.json()), response.status_code
