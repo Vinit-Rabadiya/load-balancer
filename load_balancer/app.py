@@ -1,5 +1,6 @@
 from flask import Flask, jsonify
 from consistent_hash import ConsistentHash
+import random
 
 app = Flask(__name__)
 # Initialize the consistent hash ring
@@ -7,6 +8,12 @@ hash_ring = ConsistentHash()
 
 #list of active servers replicas
 servers = []
+
+def find_hostname(server_id):
+    for server in servers:
+        if server["id"] == server_id:
+            return server["hostname"]
+    return None
 
 #adding three default servers to the hash ring
 for server_id in range(1, 4):
