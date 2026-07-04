@@ -2,6 +2,7 @@ from flask import Flask, jsonify
 from consistent_hash import ConsistentHash
 import random
 import requests
+from docker_manager import DockerManager
 
 app = Flask(__name__)
 # Initialize the consistent hash ring
@@ -60,3 +61,12 @@ def forward_home():
     except requests.RequestException:
         # Return the server's response
         return jsonify(response.json()), response.status_code
+    
+docker_manager = DockerManager()
+
+@app.route("/docker-test")
+def docker_test():
+
+    return {
+        "containers": docker_manager.list_running_containers()
+    }
