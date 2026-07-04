@@ -1,12 +1,4 @@
 # Consistent hash ring for the load balancer (Task 2)
-#
-# Parameters from the assignment spec:
-#   M = 512 slots
-#   K = log2(512) = 9 virtual servers per physical server
-#   H(i)    = i^2 + 2i + 17        (mod M)  -- request mapping
-#   Phi(i,j)= i^2 + j^2 + 2j + 25  (mod M)  -- virtual server mapping
-#
-# Collisions are resolved with linear probing (walk clockwise to next free slot)
 
 class ConsistentHash:
 
