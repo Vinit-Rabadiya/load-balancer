@@ -1,190 +1,258 @@
-from flask import Flask, jsonify, request
-from consistent_hash import ConsistentHash
 import random
-import requests
+import string
+import threading
+import time
+
+import requests as http_requests
+from flask import Flask, jsonify, request
+
+from consistent_hash import ConsistentHash
 from docker_manager import DockerManager
 
 app = Flask(__name__)
-# Initialize the consistent hash ring
+
+# hash ring and docker manager shared across all requests
 hash_ring = ConsistentHash()
-
-#list of active servers replicas
-servers = {}
-
-#adding three default servers to the hash ring
-for server_id in range(1, 4):
-    hash_ring.add_server(server_id)
-    
-    servers[server_id] = {
-        "hostname": f"server{server_id}"
-    }
-
-@app.route('/rep', methods=['GET'])
-def replicas():
-
-    return jsonify({
-        "message":{
-            "N": len(servers),
-            "replicas": [server["hostname"] for server in servers.values()]
-        },
-        "status": "successful"
-    }), 200
-
-@app.route("/route", methods=["GET"])
-def route_request():
-    request_id = random.randint(100000, 999999)
-    server_info = hash_ring.get_server(request_id)
-    server_id = server_info["server"]
-
-    return jsonify({
-        "request_id": request_id,
-        "server_id": server_id,
-        "virtual_server": server_info["virtual"],
-    }), 200
-
-@app.route("/home", methods=["GET"])
-def forward_home():
-
-    # Generate a random request ID
-    request_id = random.randint(100000, 999999)
-
-    # Find which server should handle it
-    server_info = hash_ring.get_server(request_id)
-
-    server_id = server_info["server"]
-
-    hostname = servers[server_id]["hostname"]
-
-    # Forward the request
-    try:
-        response = requests.get(f"http://{hostname}:5000/home")
-    except requests.RequestException:
-        # Return the server's response
-        return jsonify(response.json()), response.status_code
-    
 docker_manager = DockerManager()
 
-@app.route("/docker-test")
-def docker_test():
+# keeps track of active servers: { server_id -> {"hostname": str} }
+servers: dict = {}
+_lock = threading.Lock()  # need this because the monitor thread and flask threads both touch servers
+_id_counter = 0
 
-    return {
-        "containers": docker_manager.list_running_containers()
-    }
+
+def _next_id() -> int:
+    # must be called with _lock held to avoid duplicate IDs
+    global _id_counter
+    _id_counter += 1
+    return _id_counter
+
+
+def _random_hostname() -> str:
+    suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    return f"server_{suffix}"
+
+
+def _register_server(server_id: int, hostname: str):
+    # add to both the servers dict and the hash ring (call with lock held)
+    servers[server_id] = {"hostname": hostname}
+    hash_ring.add_server(server_id)
+
+
+def _deregister_server(server_id: int):
+    # remove from ring first so no new requests get routed here (call with lock held)
+    hash_ring.remove_server(server_id)
+    del servers[server_id]
+
+
+# register the 3 servers that docker-compose already started for us
+with _lock:
+    for _i in range(1, 4):
+        _sid = _next_id()
+        _register_server(_sid, f"server{_i}")
+
+
+def _heartbeat_monitor():
+    # background thread that checks all servers every 5 seconds
+    # if a server doesn't respond, remove it and spawn a replacement to keep N constant
+    while True:
+        time.sleep(5)
+
+        # take a snapshot so we don't hold the lock during the HTTP calls
+        with _lock:
+            snapshot = list(servers.items())
+
+        dead = []
+        for sid, info in snapshot:
+            hostname = info["hostname"]
+            try:
+                r = http_requests.get(f"http://{hostname}:5000/heartbeat", timeout=2)
+                if r.status_code != 200:
+                    dead.append((sid, hostname))
+            except Exception:
+                dead.append((sid, hostname))
+
+        for sid, hostname in dead:
+            print(f"[monitor] {hostname} is not responding, replacing it")
+
+            with _lock:
+                if sid not in servers:
+                    continue  # already handled elsewhere
+                _deregister_server(sid)
+                new_id = _next_id()
+
+            new_hostname = _random_hostname()
+
+            # boot the new container outside the lock - this can take a few seconds
+            try:
+                docker_manager.create_server(new_id, new_hostname)
+            except Exception as e:
+                print(f"[monitor] failed to start replacement: {e}")
+                continue
+
+            with _lock:
+                _register_server(new_id, new_hostname)
+            print(f"[monitor] started replacement {new_hostname}")
+
+
+threading.Thread(target=_heartbeat_monitor, daemon=True).start()
+
+
+def _replicas_list() -> list:
+    # returns sorted hostname list, call with lock held
+    return [servers[sid]["hostname"] for sid in sorted(servers.keys())]
+
+
+@app.route("/rep", methods=["GET"])
+def replicas():
+    with _lock:
+        return jsonify({
+            "message": {
+                "N": len(servers),
+                "replicas": _replicas_list()
+            },
+            "status": "successful"
+        }), 200
+
 
 @app.route("/add", methods=["POST"])
 def add_servers():
-
-    data = request.get_json()
-
+    data = request.get_json(silent=True)
     if not data:
-        return jsonify({
-            "message": "Request body is required",
-            "status": "failure"
-        }), 400
+        return jsonify({"message": "Request body is required", "status": "failure"}), 400
 
     n = data.get("n")
-    hostnames = data.get("hostnames")
+    hostnames = list(data.get("hostnames", []))  # copy it so we can append without touching the original
 
-    if n is None or hostnames is None:
+    if n is None or not isinstance(n, int) or n <= 0:
+        return jsonify({"message": "<Error> 'n' must be a positive integer", "status": "failure"}), 400
+
+    # hostname list can be shorter than n but never longer
+    if len(hostnames) > n:
         return jsonify({
-            "message": "Both 'n' and 'hostnames' are required.",
+            "message": "<Error> Length of hostname list is more than newly added instances",
             "status": "failure"
         }), 400
 
-    if len(hostnames) != n:
-        return jsonify({
-            "message": "Length of hostnames must equal n.",
-            "status": "failure"
-        }), 400
+    # fill in random names for however many weren't specified
+    while len(hostnames) < n:
+        hostnames.append(_random_hostname())
 
-    next_server_id = max(servers.keys()) + 1
+    # grab all the IDs up front while holding the lock, then start containers outside it
+    with _lock:
+        new_ids = [_next_id() for _ in hostnames]
 
-    for hostname in hostnames:
-
-        # Create Docker container (we'll improve this later)
+    for new_id, hostname in zip(new_ids, hostnames):
         try:
-            docker_manager.create_server(next_server_id, hostname)
+            docker_manager.create_server(new_id, hostname)
         except Exception as e:
-            return jsonify({
-                "message": str(e),
-                "status": "failure"
-            }), 500
+            return jsonify({"message": str(e), "status": "failure"}), 500
+        with _lock:
+            _register_server(new_id, hostname)
 
-        servers[next_server_id] = {
-            "hostname": hostname,
-            "status": "healthy"
-        }
+    with _lock:
+        return jsonify({
+            "message": {
+                "N": len(servers),
+                "replicas": _replicas_list()
+            },
+            "status": "successful"
+        }), 200
 
-        hash_ring.add_server(next_server_id)
-
-        next_server_id += 1
-
-    replicas = [
-        servers[sid]["hostname"]
-        for sid in sorted(servers.keys())
-    ]
-
-    return jsonify({
-        "message": {
-            "N": len(servers),
-            "replicas": replicas
-        },
-        "status": "successful"
-    }), 200
 
 @app.route("/rm", methods=["DELETE"])
 def remove_servers():
-
-    data = request.get_json()
-
+    data = request.get_json(silent=True)
     if not data:
+        return jsonify({"message": "Request body is required", "status": "failure"}), 400
+
+    n = data.get("n")
+    hostnames = data.get("hostnames", [])
+
+    if n is None or not isinstance(n, int) or n <= 0:
+        return jsonify({"message": "<Error> 'n' must be a positive integer", "status": "failure"}), 400
+
+    if len(hostnames) > n:
         return jsonify({
-            "message": "Request body is required",
+            "message": "<Error> Length of hostname list is more than removable instances",
             "status": "failure"
         }), 400
 
-    hostnames = data.get("hostnames")
+    with _lock:
+        if n > len(servers):
+            return jsonify({
+                "message": "<Error> Cannot remove more servers than currently active",
+                "status": "failure"
+            }), 400
 
-    if not hostnames:
-        return jsonify({
-            "message": "hostnames are required",
-            "status": "failure"
-        }), 400
+        # resolve named hostnames to server IDs
+        named_ids = []
+        for hn in hostnames:
+            sid = next((s for s, info in servers.items() if info["hostname"] == hn), None)
+            if sid is None:
+                return jsonify({
+                    "message": f"<Error> Hostname '{hn}' not found",
+                    "status": "failure"
+                }), 400
+            named_ids.append(sid)
 
-    removed = 0
+        # pick random ones to fill the rest of the n quota
+        remaining = n - len(named_ids)
+        candidates = [sid for sid in servers if sid not in named_ids]
+        random_ids = random.sample(candidates, remaining)
 
-    for hostname in hostnames:
+        to_remove = named_ids + random_ids
 
-        server_id = None
+        # grab hostnames now while we still have the lock
+        to_remove_info = [(sid, servers[sid]["hostname"]) for sid in to_remove]
 
-        for sid, info in servers.items():
-            if info["hostname"] == hostname:
-                server_id = sid
-                break
+        # deregister from the ring immediately so requests stop going there
+        for sid in to_remove:
+            _deregister_server(sid)
 
-        if server_id is None:
-            continue
-
+    # stop the actual containers outside the lock since it's slow
+    for sid, hostname in to_remove_info:
         try:
             docker_manager.remove_server(hostname)
         except Exception:
             pass
 
-        hash_ring.remove_server(server_id)
+    with _lock:
+        return jsonify({
+            "message": {
+                "N": len(servers),
+                "replicas": _replicas_list()
+            },
+            "status": "successful"
+        }), 200
 
-        del servers[server_id]
 
-        removed += 1
+@app.route("/<path:path>", methods=["GET"])
+def route_request(path):
+    # pick a random request ID and use consistent hashing to find the target server
+    request_id = random.randint(100000, 999999)
 
-    replicas = [
-        servers[sid]["hostname"]
-        for sid in sorted(servers.keys())
-    ]
+    with _lock:
+        if not servers:
+            return jsonify({"message": "<Error> No server replicas available", "status": "failure"}), 503
+        server_info = hash_ring.get_server(request_id)
+        hostname = servers[server_info["server"]]["hostname"]
 
-    return jsonify({
-        "message": {
-            "N": len(servers),
-            "replicas": replicas
-        },
-        "status": "successful"
-    }), 200
+    try:
+        resp = http_requests.get(f"http://{hostname}:5000/{path}", timeout=5)
+    except http_requests.RequestException as e:
+        return jsonify({"message": f"<Error> Could not reach server: {e}", "status": "failure"}), 500
+
+    # if the path doesn't exist on the server, return the assignment-specified error format
+    if resp.status_code == 404:
+        return jsonify({
+            "message": f"<Error> '/{path}' endpoint does not exist in server replicas",
+            "status": "failure"
+        }), 400
+
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"message": resp.text, "status": "failure"}
+
+    return jsonify(body), resp.status_code

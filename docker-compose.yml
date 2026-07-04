@@ -1,10 +1,15 @@
 services:
   server1:
     build: ./server
+    image: load-balancer-server   # named image so load balancer can spawn copies
+    container_name: server1
+    hostname: server1
     environment:
-      SERVER_ID: 1
+      SERVER_ID: "1"
     networks:
-      - lb_network
+      lb_network:
+        aliases:
+          - server1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/heartbeat"]
       interval: 10s
@@ -14,10 +19,15 @@ services:
 
   server2:
     build: ./server
+    image: load-balancer-server
+    container_name: server2
+    hostname: server2
     environment:
-      SERVER_ID: 2
+      SERVER_ID: "2"
     networks:
-      - lb_network
+      lb_network:
+        aliases:
+          - server2
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/heartbeat"]
       interval: 10s
@@ -27,10 +37,15 @@ services:
 
   server3:
     build: ./server
+    image: load-balancer-server
+    container_name: server3
+    hostname: server3
     environment:
-      SERVER_ID: 3
+      SERVER_ID: "3"
     networks:
-      - lb_network
+      lb_network:
+        aliases:
+          - server3
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/heartbeat"]
       interval: 10s
@@ -40,10 +55,12 @@ services:
 
   load_balancer:
     build: ./load_balancer
+    container_name: load_balancer
     ports:
       - "5000:5000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    privileged: true              # required to spawn/remove containers
     depends_on:
       server1:
         condition: service_healthy
@@ -52,13 +69,13 @@ services:
       server3:
         condition: service_healthy
     networks:
-      - lb_network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/rep"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+      lb_network:
+        aliases:
+          - load_balancer
+    environment:
+      # Makes the Docker SDK use the host socket
+      DOCKER_HOST: "unix:///var/run/docker.sock"
 
 networks:
   lb_network:
+    driver: bridge

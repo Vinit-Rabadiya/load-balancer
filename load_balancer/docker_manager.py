@@ -1,48 +1,47 @@
 import docker
 import time
+import requests as http_requests
+
+# these match what's defined in docker-compose.yml
+NETWORK_NAME = "load-balancer_lb_network"
+SERVER_IMAGE = "load-balancer-server"
+
 
 class DockerManager:
 
     def __init__(self):
         self.client = docker.from_env()
 
-    def list_running_containers(self):
-        return [
-            container.name
-            for container in self.client.containers.list()
-        ]
-
-    def create_server(self, server_id, hostname):
-
-        hostname = f"server{server_id}"
-
+    def create_server(self, server_id: int, hostname: str):
+        # start the container and wait for it to be ready before returning
         container = self.client.containers.run(
-            image="load-balancer-server",
+            image=SERVER_IMAGE,
             name=hostname,
             hostname=hostname,
             detach=True,
-            network="load-balancer_lb_network",
-            environment={
-                "SERVER_ID": str(server_id)
-            }
+            network=NETWORK_NAME,
+            environment={"SERVER_ID": str(server_id)},
         )
-        self.wait_until_healthy(container)
+        self._wait_until_ready(hostname)
         return container
-    
-    def wait_until_healthy(self, container):
 
-        while True:
-
-            container.reload()
-
-            health = container.attrs["State"].get("Health")
-
-            if health and health["Status"] == "healthy":
-                return True
-
+    def _wait_until_ready(self, hostname: str, timeout: int = 30):
+        # poll /heartbeat until we get a 200 back or we time out
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                r = http_requests.get(f"http://{hostname}:5000/heartbeat", timeout=2)
+                if r.status_code == 200:
+                    return
+            except Exception:
+                pass
             time.sleep(1)
-            
-    def remove_server(self, hostname):
-        container = self.client.containers.get(hostname)
-        container.stop()
-        container.remove()
+        raise TimeoutError(f"Server {hostname} did not become ready in {timeout}s")
+
+    def remove_server(self, hostname: str):
+        try:
+            container = self.client.containers.get(hostname)
+            container.stop()
+            container.remove()
+        except docker.errors.NotFound:
+            pass  # container already gone, nothing to do

@@ -3,13 +3,17 @@ import os
 
 app = Flask(__name__)
 
+# get server ID from environment variable set when the container is started
 SERVER_ID = os.getenv('SERVER_ID', 'unknown')
+
 @app.route('/home', methods=['GET'])
 def home():
-    return jsonify({'message': f'Hello from server {SERVER_ID}!',
-                    "status": 'success'}), 200
+    return jsonify({
+        'message': f'Hello from Server: {SERVER_ID}',
+        'status': 'successful'
+    }), 200
 
-@app.route("/heartbeat", methods=['GET'])
+@app.route('/heartbeat', methods=['GET'])
 def heartbeat():
-    return jsonify({'message': f'Server {SERVER_ID} is alive!',
-                    "status": 'success'}), 200
+    # just return 200 so the load balancer knows we're alive
+    return '', 200
