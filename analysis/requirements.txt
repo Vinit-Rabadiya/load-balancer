@@ -1,0 +1,4 @@
+aiohttp
+matplotlib
+requests
+docker
