@@ -2,7 +2,10 @@
 
 ## Overview
 
-A customizable load balancer that routes client requests across server replicas using consistent hashing. Built with Python (Flask), Docker, and the Docker SDK.
+A customizable load balancer that routes client requests across server replicas using consistent hashing. The following tools were used to build the project:
+- Python + Flask - to act as the loadbalancer backend
+- Custom C HTTP Server - a simple HTTP server written using UNIX sockets to act as the backend server
+- Docker - to containerize the entire project
 
 ---
 
