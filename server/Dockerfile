@@ -1,8 +1,11 @@
-FROM python:3.11-slim
-WORKDIR /app
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+FROM alpine:3.14
+
+RUN apk add --no-cache cmake build-base curl
+
+# Build the source code
 COPY . .
+RUN cmake -B build
+RUN cmake --build build
+
 EXPOSE 5000
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "app:app"]
+ENTRYPOINT ["./build/main"]

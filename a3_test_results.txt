@@ -1,0 +1,65 @@
+=======================================================
+  1. GET /rep - check current replicas
+=======================================================
+  status : 200
+  body   : {'message': {'N': 3, 'replicas': ['server1', 'server2', 'server3']}, 'status': 'successful'}
+
+=======================================================
+  2. POST /add - add 2 servers (S4, S5)
+=======================================================
+  status : 500
+  body   : {'message': '409 Client Error for http+docker://localhost/v1.54/containers/create?name=S4: Conflict ("Conflict. The container name "/S4" is already in use by container "7627d1c2e8ff13d1ee75a20e2493b8ff6eda0d488f2685b0350b73faf15b0d7e". You have to remove (or rename) that container to be able to reuse that name.")', 'status': 'failure'}
+
+=======================================================
+  2b. POST /add - error: hostnames list longer than n
+=======================================================
+  status : 400
+  body   : {'message': '<Error> Length of hostname list is more than newly added instances', 'status': 'failure'}
+
+=======================================================
+  3. GET /rep - confirm state after /add
+=======================================================
+  status : 200
+  body   : {'message': {'N': 3, 'replicas': ['server1', 'server2', 'server3']}, 'status': 'successful'}
+
+=======================================================
+  4. GET /home - valid route
+=======================================================
+  status : 200
+  body   : {'message': 'Hello from Server: 1', 'status': 'successful'}
+
+=======================================================
+  5. GET /other - invalid path (expect 400)
+=======================================================
+  status : 400
+  body   : {'message': "<Error> '/other' endpoint does not exist in server replicas", 'status': 'failure'}
+
+=======================================================
+  6. DELETE /rm - remove 3 servers (S4 named, 2 random)
+=======================================================
+  status : 400
+  body   : {'message': "<Error> Hostname 'S4' not found", 'status': 'failure'}
+
+=======================================================
+  6b. DELETE /rm - error: hostnames list longer than n
+=======================================================
+  status : 400
+  body   : {'message': '<Error> Length of hostname list is more than removable instances', 'status': 'failure'}
+
+=======================================================
+  7. GET /rep - final replica state
+=======================================================
+  status : 200
+  body   : {'message': {'N': 3, 'replicas': ['server1', 'server2', 'server3']}, 'status': 'successful'}
+
+=======================================================
+  8. Failure recovery - kill a server container and wait for replacement
+=======================================================
+  current replicas: ['server1', 'server2', 'server3']
+  stopping container: server1
+  container server1 stopped
+  waiting for load balancer to detect failure and spawn replacement ...
+  [3s] replicas: ['server1', 'server2', 'server3']
+  [6s] replicas: ['server1', 'server2', 'server3']
+  [9s] replicas: ['server2', 'server3', 'server_q2r3kn']
+  replacement detected! new replica set: ['server2', 'server3', 'server_q2r3kn']
