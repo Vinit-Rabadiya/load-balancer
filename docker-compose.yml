@@ -78,4 +78,5 @@ services:
 
 networks:
   lb_network:
+    name: load-balancer_lb_network
     driver: bridge

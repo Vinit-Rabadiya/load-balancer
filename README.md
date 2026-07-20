@@ -137,6 +137,6 @@ Run: `python analysis/a4_modified_hash.py`
 
 ## Assumptions
 
-- Docker is running and the `load-balancer_lb_network` network exists before the load balancer starts.
+- Docker is running. The network name is pinned to `load-balancer_lb_network` via the `name:` field in `docker-compose.yml`, so it doesn't depend on the folder the project is cloned/extracted into.
 - The server image is named `load-balancer-server` (set by `image:` tag in `docker-compose.yml`) so the load balancer can spawn copies of it at runtime.
 - Server IDs are assigned sequentially from an internal counter. When a replacement is spawned after failure, it gets a new ID and a random hostname.
